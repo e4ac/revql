@@ -1,0 +1,10 @@
+.DS_Store
+.idea/
+.vscode/
+*.pdb
+**/*.rs.bk
+**/mutants.out*/
+Cargo.lock
+debug/
+release/
+target/
