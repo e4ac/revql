@@ -1,0 +1,85 @@
+name: CICD
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+    tags: ['v[0-9]+\.[0-9]+\.[0-9]+']
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+permissions:
+  contents: read
+
+jobs:
+  analysis:
+    name: Code Analysis
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Check Format
+        run: cargo fmt --all --check --quiet
+      - name: Check Clippy
+        run: cargo clippy --all-features --all-targets -- -D warnings
+
+  test:
+    name: Test
+    needs: [analysis]
+    strategy:
+      fail-fast: true
+      matrix:
+        os: [macos-latest, ubuntu-latest, windows-latest]
+
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Run Tests
+        run: cargo test --all-features --all-targets --workspace
+
+  prepare-release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    name: Prepare Release
+    needs: [test]
+    permissions:
+      contents: write
+
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Create Release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release delete "${{ github.ref_name }}" --yes || true
+          gh release create "${{ github.ref_name }}" --generate-notes --latest
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    name: Release
+    needs: [prepare-release]
+    permissions:
+      contents: write
+    strategy:
+      matrix:
+        platform:
+          - { os: macos-latest, suffix: macos-arm64, ext: "" }
+          - { os: ubuntu-latest, suffix: linux-amd64, ext: "" }
+          - { os: windows-latest, suffix: windows-amd64, ext: ".exe" }
+
+    runs-on: ${{ matrix.platform.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install binaries
+        shell: sh
+        run: |
+          cargo install --path crates/revql-cli --root release --force
+          cargo install --path crates/revql-mcp --root release --force
+          mv release/bin/revql${{ matrix.platform.ext }} release/bin/revql-${{ matrix.platform.suffix }}${{ matrix.platform.ext }}
+          mv release/bin/revql-mcp${{ matrix.platform.ext }} release/bin/revql-mcp-${{ matrix.platform.suffix }}${{ matrix.platform.ext }}
+
+      - name: Upload Binaries
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload ${{ github.ref_name }} release/bin/* --clobber
